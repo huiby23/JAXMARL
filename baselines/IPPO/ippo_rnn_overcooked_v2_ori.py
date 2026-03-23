@@ -9,7 +9,7 @@ from flax.training.train_state import TrainState
 import distrax
 from gymnax.wrappers.purerl import LogWrapper, FlattenObservationWrapper
 import jaxmarl
-from jaxmarl.wrappers.baselines import LogWrapper, OvercookedV2LogWrapper, save_params
+from jaxmarl.wrappers.baselines import LogWrapper, OvercookedV2LogWrapper
 from jaxmarl.environments import overcooked_v2_layouts
 from jaxmarl.viz.overcooked_v2_visualizer import OvercookedV2Visualizer
 import hydra
@@ -218,65 +218,7 @@ def unbatchify(x: jnp.ndarray, agent_list, num_envs, num_actors):
     return {a: x[i] for i, a in enumerate(agent_list)}
 
 
-def _to_wandb_loggable(tree):
-    def _convert(x):
-        x_np = np.asarray(x)
-        if x_np.shape == ():
-            return x_np.item()
-        return x_np
-
-    return jax.tree_util.tree_map(_convert, tree)
-
-
-def _log_seed_mean_metrics(metrics, num_seeds: int):
-    metrics_np = jax.tree_util.tree_map(np.asarray, metrics)
-    if num_seeds > 1:
-        metrics_np = jax.tree_util.tree_map(lambda x: x.mean(axis=0), metrics_np)
-
-    update_steps = np.asarray(metrics_np["update_step"])
-    if update_steps.ndim == 0:
-        wandb.log(_to_wandb_loggable(metrics_np))
-        return
-
-    for idx in range(update_steps.shape[0]):
-        metric_i = jax.tree_util.tree_map(
-            lambda x: x[idx] if np.asarray(x).ndim > 0 else x, metrics_np
-        )
-        wandb.log(_to_wandb_loggable(metric_i))
-
-
-class VmapCheckpointManager:
-    def __init__(self, save_dir: str, prefix: str, best_mode: str = "max"):
-        self.save_dir = save_dir
-        self.prefix = prefix
-        self.best_mode = best_mode
-        self.best_metric = -np.inf if best_mode == "max" else np.inf
-        os.makedirs(self.save_dir, exist_ok=True)
-
-    def _is_better(self, metric: float) -> bool:
-        if self.best_mode == "min":
-            return metric < self.best_metric
-        return metric > self.best_metric
-
-    def _save(self, params, suffix: str):
-        save_path = os.path.join(self.save_dir, f"{self.prefix}_{suffix}.safetensors")
-        save_params(params, save_path)
-
-    def maybe_save_best(self, params, metric):
-        metric = float(np.asarray(metric))
-        if self._is_better(metric):
-            self.best_metric = metric
-            self._save(params, "best")
-
-    def save_final(self, params):
-        self._save(params, "final")
-
-
-def make_train(
-    config,
-    checkpoint_callback=None,
-    checkpoint_metric_key: str = "returned_episode_returns",
-):
+def make_train(config):
     env = jaxmarl.make(config["ENV_NAME"], **config["ENV_KWARGS"])
 
     config["NUM_ACTORS"] = env.num_agents * config["NUM_ENVS"]
@@ -324,7 +266,7 @@ def make_train(
         init_value=1.0, end_value=0.0, transition_steps=config["REW_SHAPING_HORIZON"]
     )
 
-    def train(rng, seed_idx):
+    def train(rng):
 
         # INIT NETWORK
         network = ActorCriticRNN(env.action_space(env.agents[0]).n, config=config)
@@ -608,25 +550,14 @@ def make_train(
             metric = traj_batch.info
             rng = update_state[-1]
 
+            def callback(metric):
+                wandb.log(metric)
+
             update_step = update_step + 1
             metric = jax.tree_util.tree_map(lambda x: x.mean(), metric)
             metric["update_step"] = update_step
             metric["env_step"] = update_step * config["NUM_STEPS"] * config["NUM_ENVS"]
-
-            if checkpoint_callback is not None:
-                ckpt_metric = metric
-                for key in checkpoint_metric_key.split("."):
-                    ckpt_metric = ckpt_metric[key]
-                ckpt_metric = jnp.asarray(ckpt_metric).mean()
-                jax.debug.callback(
-                    checkpoint_callback,
-                    train_state.params,
-                    ckpt_metric,
-                    metric["update_step"],
-                    metric["env_step"],
-                    seed_idx,
-                    ordered=True,
-                )
+            jax.debug.callback(callback, metric)
 
             runner_state = (
                 train_state,
@@ -665,10 +596,6 @@ def main(config):
 
     layout_name = config["ENV_KWARGS"]["layout"]
     num_seeds = config["NUM_SEEDS"]
-    metric_key = config.get("SAVE_BEST_BY", "returned_episode_returns")
-    save_path = config.get("SAVE_PATH", "")
-    save_best_mode = config.get("SAVE_BEST_MODE", "max")
-    alg_name = "ippo_rnn_overcooked_v2"
 
     wandb.init(
         entity=config["ENTITY"],
@@ -682,60 +609,8 @@ def main(config):
     with jax.disable_jit(False):
         rng = jax.random.PRNGKey(config["SEED"])
         rngs = jax.random.split(rng, num_seeds)
-        seed_ids = jnp.arange(num_seeds, dtype=jnp.int32)
-
-        checkpoint_managers = {}
-        if save_path:
-            for i in range(num_seeds):
-                run_rng = int(np.asarray(rngs[i][0]))
-                run_dir = os.path.join(
-                    save_path,
-                    alg_name,
-                    config["ENV_NAME"],
-                    f"{layout_name}_seed{config['SEED']}_vmap{i}_rng{run_rng}",
-                )
-                checkpoint_managers[i] = VmapCheckpointManager(
-                    save_dir=run_dir,
-                    prefix=alg_name,
-                    best_mode=save_best_mode,
-                )
-                OmegaConf.save(
-                    OmegaConf.create(config),
-                    os.path.join(run_dir, "config.yaml"),
-                )
-
-        def _extract_params_at(tree, idx):
-            return jax.tree_util.tree_map(lambda x: x[idx], tree)
-
-        def _checkpoint_callback(params, metric, update_step, env_step, seed_idx):
-            if not checkpoint_managers:
-                return
-            seed_idx_arr = np.asarray(seed_idx)
-            if seed_idx_arr.ndim == 0:
-                checkpoint_managers[int(seed_idx_arr)].maybe_save_best(params, metric)
-                return
-            metric_arr = np.asarray(metric)
-            for i, sid in enumerate(seed_idx_arr):
-                params_i = _extract_params_at(params, i)
-                checkpoint_managers[int(sid)].maybe_save_best(params_i, metric_arr[i])
-
-        train_jit = jax.jit(
-            make_train(
-                config,
-                checkpoint_callback=_checkpoint_callback if checkpoint_managers else None,
-                checkpoint_metric_key=metric_key,
-            )
-        )
-        out = jax.block_until_ready(jax.vmap(train_jit)(rngs, seed_ids))
-
-        if checkpoint_managers:
-            final_train_state = out["runner_state"][0]
-            for i in range(num_seeds):
-                params_i = _extract_params_at(final_train_state.params, i)
-                checkpoint_managers[i].save_final(params_i)
-
-        if config["WANDB_MODE"] != "disabled":
-            _log_seed_mean_metrics(out["metrics"], num_seeds)
+        train_jit = jax.jit(make_train(config))
+        out = jax.vmap(train_jit)(rngs)
 
 
 if __name__ == "__main__":

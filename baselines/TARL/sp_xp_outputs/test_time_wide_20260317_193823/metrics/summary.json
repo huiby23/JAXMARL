@@ -1,0 +1,24 @@
+{
+  "num_pairs": 4,
+  "num_sp_pairs": 2,
+  "num_xp_pairs": 2,
+  "sp_mean_return": 204.9,
+  "sp_std_return": 4.900000000000006,
+  "xp_mean_return": -107.5,
+  "xp_std_return": 15.700000000000003,
+  "sp_xp_gap_return": 312.4,
+  "sp_mean_shaped_return": 170.165,
+  "sp_std_shaped_return": 12.974999999999994,
+  "xp_mean_shaped_return": 37.51,
+  "xp_std_shaped_return": 13.319999999999999,
+  "sp_xp_gap_shaped_return": 132.655,
+  "env_kwargs": {
+    "layout": "test_time_wide",
+    "agent_view_size": 2,
+    "negative_rewards": true,
+    "sample_recipe_on_delivery": true,
+    "random_agent_positions": true
+  },
+  "num_eval_episodes": 100,
+  "deterministic": true
+}

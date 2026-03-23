@@ -1,0 +1,24 @@
+{
+  "num_pairs": 4,
+  "num_sp_pairs": 0,
+  "num_xp_pairs": 4,
+  "sp_mean_return": NaN,
+  "sp_std_return": NaN,
+  "xp_mean_return": 147.0,
+  "xp_std_return": 20.457272545478784,
+  "sp_xp_gap_return": NaN,
+  "sp_mean_shaped_return": NaN,
+  "sp_std_shaped_return": NaN,
+  "xp_mean_shaped_return": 109.005,
+  "xp_std_shaped_return": 16.214238341655147,
+  "sp_xp_gap_shaped_return": NaN,
+  "env_kwargs": {
+    "layout": "forced_coord",
+    "agent_view_size": 2,
+    "negative_rewards": true,
+    "sample_recipe_on_delivery": true,
+    "random_agent_positions": true
+  },
+  "num_eval_episodes": 100,
+  "deterministic": true
+}

@@ -1,0 +1,42 @@
+"ENV_NAME": "overcooked_v2"
+"ENV_KWARGS":
+  "layout": "forced_coord"
+  "agent_view_size": 2
+  "negative_rewards": True
+  "sample_recipe_on_delivery": True
+  "random_agent_positions": True
+
+"SEED": 0
+"NUM_EVAL_EPISODES": 20
+"DETERMINISTIC": True
+
+"SAVE_SINGLE_GIFS": True
+"SAVE_MONTAGE_GIF": True
+"MONTAGE_COLUMNS": 3
+"GIF_DURATION": 0.25
+"GIF_AGENT_VIEW_SIZE": null
+"GIF_EPISODES_PER_PAIR": 1
+"GIF_EPISODE_PAUSE_FRAMES": 0
+
+"OUTPUT_ROOT": "baselines/TARL/sp_xp_outputs"
+"DEFAULT_CHECKPOINT_ROOT": "baselines/checkpoints"
+
+"MODELS":
+  "LEFT_POOL":
+    - "name": "ippo_latest"
+      "algo": "ippo_rnn_overcooked_v2"
+      "checkpoint": ""
+      "checkpoint_tag": "best"
+      "policy_config":
+        "FC_DIM_SIZE": 128
+        "GRU_HIDDEN_DIM": 128
+        "ACTIVATION": "relu"
+    - "name": "mappo_v2_latest"
+      "algo": "mappo_rnn_overcooked_v2_v2"
+      "checkpoint": ""
+      "checkpoint_tag": "best"
+      "policy_config":
+        "FC_DIM_SIZE": 128
+        "GRU_HIDDEN_DIM": 128
+        "ACTIVATION": "relu"
+  "RIGHT_POOL": ${MODELS.LEFT_POOL}

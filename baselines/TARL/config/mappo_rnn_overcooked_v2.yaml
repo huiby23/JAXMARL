@@ -1,6 +1,6 @@
 "ENV_NAME": "overcooked_v2"
-"ENV_KWARGS": 
-  "layout" : "forced_coord"
+"ENV_KWARGS":
+  "layout": "grounded_coord_simple"
   "agent_view_size": 2
   "negative_rewards": True
   "sample_recipe_on_delivery": True
@@ -34,7 +34,4 @@
 
 "ENTITY": ""
 "PROJECT": ""
-"WANDB_MODE" : "online"
-"SAVE_PATH": "check_points/ippo_rnn_overcooked_v2"
-"SAVE_BEST_BY": "returned_episode_returns"
-"SAVE_BEST_MODE": "max"
+"WANDB_MODE": "online"

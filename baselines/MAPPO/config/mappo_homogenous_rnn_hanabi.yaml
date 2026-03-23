@@ -21,7 +21,7 @@
 "ANNEAL_LR": True
 
 # WandB Params
-"WANDB_MODE": "disabled"
+"WANDB_MODE": "online"
 "ENTITY": ""
 "PROJECT": ""
 

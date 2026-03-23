@@ -1,0 +1,19 @@
+[
+  {
+    "pair_name": "L0_ippo_forced_vmap0__R0_ippo_forced_vmap0",
+    "left_name": "ippo_forced_vmap0",
+    "right_name": "ippo_forced_vmap0",
+    "left_algo": "ippo_rnn_overcooked_v2",
+    "right_algo": "ippo_rnn_overcooked_v2",
+    "left_checkpoint": "/teams/ius_1663576043/hby/rl/JaxMARL/baselines/checkpoints/ippo_rnn_overcooked_v2/overcooked_v2/forced_coord_seed0_vmap0_rng1524306142/ippo_rnn_overcooked_v2_best.safetensors",
+    "right_checkpoint": "/teams/ius_1663576043/hby/rl/JaxMARL/baselines/checkpoints/ippo_rnn_overcooked_v2/overcooked_v2/forced_coord_seed0_vmap0_rng1524306142/ippo_rnn_overcooked_v2_best.safetensors",
+    "is_sp": true,
+    "mean_return": 211.6,
+    "std_return": 9.871170143402452,
+    "mean_shaped_return": 150.04,
+    "std_shaped_return": 5.2400763353218425,
+    "mean_length": 400.0,
+    "num_episodes": 100,
+    "gif_path": "/teams/ius_1663576043/hby/rl/JaxMARL/baselines/TARL/sp_xp_outputs/forced_coord_20260318_011026/gifs/single/L0_ippo_forced_vmap0__R0_ippo_forced_vmap0.gif"
+  }
+]

@@ -30,6 +30,7 @@ NUM_SEEDS: 5
 ENTITY: ''
 PROJECT: ''
 WANDB_MODE: online
+WANDB_GROUP: ''
 SAVE_PATH: check_points/mappo_rnn_overcooked_v2_v2
 SAVE_BEST_BY: returned_episode_returns
 SAVE_BEST_MODE: max

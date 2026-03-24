@@ -305,12 +305,18 @@ def _flatten_nested_dict(tree, parent_key: str = ""):
     flat = {}
     for key, value in tree.items():
         key = str(key)
-        full_key = f"{parent_key}/{key}" if parent_key else key
+        full_key = f"{parent_key}_{key}" if parent_key else key
         if isinstance(value, dict):
             flat.update(_flatten_nested_dict(value, full_key))
         else:
             flat[full_key] = value
     return flat
+
+
+def _configure_wandb_run(run):
+    # Ensure all user metrics share a consistent x-axis in W&B charts.
+    run.define_metric("env_step")
+    run.define_metric("*", step_metric="env_step")
 
 
 class VmapCheckpointManager:
@@ -788,15 +794,45 @@ def main(config):
     save_path = config.get("SAVE_PATH", "")
     save_best_mode = config.get("SAVE_BEST_MODE", "max")
     alg_name = "mappo_rnn_overcooked_v2_v2"
+    run_name_prefix = f"mappo_rnn_overcooked_v2_v2_{layout_name}_{ws_source}"
+    wandb_enabled = config["WANDB_MODE"] != "disabled"
+    wandb_group_override = config.get("WANDB_GROUP", "")
+    seed_runs = {}
+    seed_group = None
 
-    wandb.init(
-        entity=config["ENTITY"],
-        project=config["PROJECT"],
-        tags=["MAPPO", "RNN", "OvercookedV2", ws_source],
-        config=config,
-        mode=config["WANDB_MODE"],
-        name=f"mappo_rnn_overcooked_v2_v2_{layout_name}_{ws_source}",
-    )
+    if wandb_enabled:
+        if num_seeds <= 1:
+            seed_runs[0] = wandb.init(
+                entity=config["ENTITY"],
+                project=config["PROJECT"],
+                tags=["MAPPO", "RNN", "OvercookedV2", ws_source],
+                config=config,
+                mode=config["WANDB_MODE"],
+                name=run_name_prefix,
+            )
+            _configure_wandb_run(seed_runs[0])
+        else:
+            # Use a stable experiment-level group by default so multi-seed runs
+            # are consistently grouped in W&B without requiring CLI overrides.
+            seed_group = (
+                str(wandb_group_override).strip()
+                if str(wandb_group_override).strip()
+                else run_name_prefix
+            )
+            for i in range(num_seeds):
+                run_i = wandb.init(
+                    entity=config["ENTITY"],
+                    project=config["PROJECT"],
+                    tags=["MAPPO", "RNN", "OvercookedV2", ws_source],
+                    config=config,
+                    mode=config["WANDB_MODE"],
+                    group=seed_group,
+                    name=f"{run_name_prefix}_s{i}",
+                    reinit="create_new",
+                )
+                run_i.config.update({"seed_index": i}, allow_val_change=True)
+                _configure_wandb_run(run_i)
+                seed_runs[i] = run_i
 
     with jax.disable_jit(False):
         rng = jax.random.PRNGKey(config["SEED"])
@@ -838,8 +874,6 @@ def main(config):
                 params_i = _extract_params_at(params, i)
                 checkpoint_managers[int(sid)].maybe_save_best(params_i, metric_arr[i])
 
-        pending_seed_metrics = {}
-
         def _iter_seed_metrics(metric_loggable, seed_idx):
             seed_idx_arr = np.asarray(seed_idx)
             if seed_idx_arr.ndim == 0:
@@ -860,50 +894,9 @@ def main(config):
                 for i in range(num_seed_entries)
             ]
 
-        def _aggregate_seed_metrics(seed_metrics_for_step):
-            all_keys = set()
-            for metric_i in seed_metrics_for_step.values():
-                all_keys.update(metric_i.keys())
-
-            log_payload = {}
-            for key in sorted(all_keys):
-                if key == "env_step":
-                    continue
-
-                values = []
-                for metric_i in seed_metrics_for_step.values():
-                    if key not in metric_i:
-                        continue
-                    value_np = np.asarray(metric_i[key])
-                    if value_np.shape == ():
-                        values.append(float(value_np))
-
-                if len(values) == 0:
-                    continue
-
-                values_np = np.asarray(values, dtype=np.float64)
-                mean = float(np.nanmean(values_np))
-                std = float(np.nanstd(values_np))
-                log_payload[f"{key}/mean"] = mean
-                log_payload[f"{key}/std"] = std
-                log_payload[f"{key}/mean_plus_std"] = mean + std
-                log_payload[f"{key}/mean_minus_std"] = mean - std
-                if key == "returns":
-                    log_payload["returns"] = mean
-
-            return log_payload
-
         def _wandb_callback(metric, seed_idx):
             metric_loggable = _to_wandb_loggable(metric)
             seed_metric_pairs = _iter_seed_metrics(metric_loggable, seed_idx)
-
-            if num_seeds <= 1:
-                flat_metric = _flatten_nested_dict(seed_metric_pairs[0][1])
-                if "returned_episode_returns" in flat_metric:
-                    flat_metric["returns"] = flat_metric["returned_episode_returns"]
-                env_step = int(np.asarray(flat_metric["env_step"]))
-                wandb.log(flat_metric, step=env_step)
-                return
 
             for seed_id, metric_i in seed_metric_pairs:
                 flat_metric = _flatten_nested_dict(metric_i)
@@ -911,25 +904,18 @@ def main(config):
                     flat_metric["returns"] = flat_metric["returned_episode_returns"]
 
                 env_step = int(np.asarray(flat_metric["env_step"]))
-                if env_step not in pending_seed_metrics:
-                    pending_seed_metrics[env_step] = {}
-                pending_seed_metrics[env_step][seed_id] = flat_metric
-
-                if len(pending_seed_metrics[env_step]) < num_seeds:
-                    continue
-
-                log_payload = _aggregate_seed_metrics(pending_seed_metrics[env_step])
-                log_payload["env_step"] = env_step
-                log_payload["num_seeds"] = num_seeds
-                wandb.log(log_payload, step=env_step)
-                del pending_seed_metrics[env_step]
+                run_i = seed_runs.get(seed_id)
+                if run_i is None and num_seeds <= 1:
+                    run_i = seed_runs.get(0)
+                if run_i is not None:
+                    run_i.log(flat_metric, step=env_step)
 
         train_jit = jax.jit(
             make_train(
                 config,
                 checkpoint_callback=_checkpoint_callback if checkpoint_managers else None,
                 checkpoint_metric_key=metric_key,
-                wandb_callback=_wandb_callback if config["WANDB_MODE"] != "disabled" else None,
+                wandb_callback=_wandb_callback if wandb_enabled else None,
             )
         )
         out = jax.block_until_ready(jax.vmap(train_jit)(rngs, seed_ids))
@@ -940,7 +926,8 @@ def main(config):
                 params_i = _extract_params_at(final_actor_train_state.params, i)
                 checkpoint_managers[i].save_final(params_i)
 
-    wandb.finish()
+    for run_i in seed_runs.values():
+        run_i.finish()
 
 
 if __name__ == "__main__":

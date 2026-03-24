@@ -1,0 +1,45 @@
+ENV_NAME: overcooked_v2
+WORLD_STATE_SOURCE: obs_concat
+ENV_KWARGS:
+  layout: forced_coord
+  agent_view_size: 2
+  negative_rewards: true
+  sample_recipe_on_delivery: true
+  random_agent_positions: true
+LR: 0.00025
+ANNEAL_LR: true
+LR_WARMUP: 0.05
+NUM_ENVS: 256
+NUM_STEPS: 256
+UPDATE_EPOCHS: 4
+NUM_MINIBATCHES: 64
+TOTAL_TIMESTEPS: 30000000.0
+REW_SHAPING_HORIZON: 15000000.0
+FC_DIM_SIZE: 128
+GRU_HIDDEN_DIM: 128
+CLIP_EPS: 0.2
+ENT_COEF: 0.01
+GAMMA: 0.99
+GAE_LAMBDA: 0.95
+SCALE_CLIP_EPS: false
+VF_COEF: 0.5
+MAX_GRAD_NORM: 0.25
+ACTIVATION: relu
+SEED: 0
+NUM_SEEDS: 5
+ENTITY: huiby_tsinghua23
+PROJECT: 2023-0323-Overcooked-MARL
+WANDB_MODE: online
+WANDB_GROUP: overcooked_v2_cmp_20260323_162741
+WANDB_ALGO_LABEL: MAPPO
+SAVE_PATH: check_points/mappo_rnn_overcooked_v2_v3
+SAVE_BEST_BY: returned_episode_returns
+SAVE_BEST_MODE: max
+TENSORBOARD_ENABLED: false
+TENSORBOARD_DIR: tb_logs/mappo_rnn_overcooked_v2_v3
+TENSORBOARD_RUN_NAME: ''
+TENSORBOARD_FLUSH_SECS: 10
+TENSORBOARD_LOG_SEED_RUNS: true
+TENSORBOARD_LOG_AGGREGATE: true
+TENSORBOARD_MARGIN_CHART: true
+TENSORBOARD_LOG_STD_LINE: false

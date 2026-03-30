@@ -10,30 +10,30 @@
 "NUM_EVAL_EPISODES": 20
 "DETERMINISTIC": True
 
-"SAVE_SINGLE_GIFS": True
-"SAVE_MONTAGE_GIF": True
-"MONTAGE_COLUMNS": 3
+"SAVE_SINGLE_GIFS": False
+"SAVE_MONTAGE_GIF": False
+"MONTAGE_COLUMNS": 2
 "GIF_DURATION": 0.25
 "GIF_AGENT_VIEW_SIZE": null
 "GIF_EPISODES_PER_PAIR": 1
 "GIF_EPISODE_PAUSE_FRAMES": 0
 
 "OUTPUT_ROOT": "baselines/TARL/sp_xp_outputs"
-"DEFAULT_CHECKPOINT_ROOT": "baselines/checkpoints"
+"DEFAULT_CHECKPOINT_ROOT": "check_points"
 
 "MODELS":
   "LEFT_POOL":
-    - "name": "ippo_latest"
-      "algo": "ippo_rnn_overcooked_v2"
-      "checkpoint": ""
+    - "name": "ab_tta_vmap0"
+      "algo": "mappo_rnn_overcooked_v2_ab_tta"
+      "checkpoint": "check_points/mappo_rnn_overcooked_v2_ab_tta/mappo_rnn_overcooked_v2_ab_tta/overcooked_v2/forced_coord_obs_concat_seed0_vmap0_rng4146024105/mappo_rnn_overcooked_v2_ab_tta_best.safetensors"
       "checkpoint_tag": "best"
       "policy_config":
         "FC_DIM_SIZE": 128
         "GRU_HIDDEN_DIM": 128
         "ACTIVATION": "relu"
-    - "name": "mappo_v2_latest"
-      "algo": "mappo_rnn_overcooked_v2_v2"
-      "checkpoint": ""
+    - "name": "ab_tta_vmap1"
+      "algo": "mappo_rnn_overcooked_v2_ab_tta"
+      "checkpoint": "check_points/mappo_rnn_overcooked_v2_ab_tta/mappo_rnn_overcooked_v2_ab_tta/overcooked_v2/forced_coord_obs_concat_seed0_vmap1_rng2718843009/mappo_rnn_overcooked_v2_ab_tta_best.safetensors"
       "checkpoint_tag": "best"
       "policy_config":
         "FC_DIM_SIZE": 128

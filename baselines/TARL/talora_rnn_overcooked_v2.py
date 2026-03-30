@@ -128,8 +128,8 @@ class ScannedRNN(nn.Module):
         return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
 
 
-def _lora_targets(config: Dict) -> set:
-    raw = config.get("LORA_TARGETS", [])
+def _adapter_targets(config: Dict) -> set:
+    raw = config.get("ADAPTER_TARGETS", config.get("LORA_TARGETS", []))
     if isinstance(raw, str):
         return {x.strip() for x in raw.split(",") if x.strip()}
     if isinstance(raw, (tuple, list)):
@@ -137,14 +137,48 @@ def _lora_targets(config: Dict) -> set:
     return set()
 
 
-def _use_lora_layer(config: Dict, layer_name: str) -> bool:
-    if not bool(config.get("LORA_ENABLED", False)):
+def _adapter_enabled(config: Dict) -> bool:
+    return bool(config.get("ADAPTER_ENABLED", config.get("LORA_ENABLED", False)))
+
+
+def _adapter_type(config: Dict) -> str:
+    return str(config.get("ADAPTER_TYPE", "lora")).strip().lower()
+
+
+def _adapter_rank(config: Dict) -> int:
+    return int(config.get("ADAPTER_RANK", config.get("LORA_RANK", 0)))
+
+
+def _adapter_alpha(config: Dict) -> float:
+    return float(config.get("ADAPTER_ALPHA", config.get("LORA_ALPHA", 1.0)))
+
+
+def _use_adapter_layer(config: Dict, layer_name: str) -> bool:
+    if not _adapter_enabled(config):
         return False
-    rank = int(config.get("LORA_RANK", 0))
+    rank = _adapter_rank(config)
     if rank <= 0:
         return False
-    targets = _lora_targets(config)
+    targets = _adapter_targets(config)
     return "all" in targets or layer_name in targets
+
+
+def _train_adapter_a_flag(config: Dict, phase: str, default: bool) -> bool:
+    return bool(
+        config.get(
+            f"{phase}_TRAIN_ADAPTER_A",
+            config.get(f"{phase}_TRAIN_LORA_A", default),
+        )
+    )
+
+
+def _train_adapter_b_flag(config: Dict, phase: str, default: bool) -> bool:
+    return bool(
+        config.get(
+            f"{phase}_TRAIN_ADAPTER_B",
+            config.get(f"{phase}_TRAIN_LORA_B", default),
+        )
+    )
 
 
 class LoRADense(nn.Module):
@@ -174,6 +208,39 @@ class LoRADense(nn.Module):
         return y
 
 
+class ResidualAdapterDense(nn.Module):
+    features: int
+    rank: int
+    alpha: float
+    activation: Callable[..., Any] = nn.relu
+    use_bias: bool = True
+    kernel_init: Callable[..., Any] = orthogonal(1.0)
+    bias_init: Callable[..., Any] = constant(0.0)
+    adapter_a_init: Callable[..., Any] = nn.initializers.normal(stddev=0.01)
+    adapter_b_init: Callable[..., Any] = nn.initializers.zeros
+
+    @nn.compact
+    def __call__(self, x):
+        in_features = x.shape[-1]
+        kernel = self.param("kernel", self.kernel_init, (in_features, self.features))
+        y = jnp.matmul(x, kernel)
+        if self.use_bias:
+            bias = self.param("bias", self.bias_init, (self.features,))
+            y = y + bias
+
+        if self.rank > 0:
+            adapter_a = self.param(
+                "adapter_A", self.adapter_a_init, (in_features, self.rank)
+            )
+            adapter_b = self.param(
+                "adapter_B", self.adapter_b_init, (self.rank, self.features)
+            )
+            scale = self.alpha / float(self.rank)
+            residual = self.activation(jnp.matmul(x, adapter_a))
+            y = y + scale * jnp.matmul(residual, adapter_b)
+        return y
+
+
 def _dense(
     x,
     config: Dict,
@@ -184,16 +251,26 @@ def _dense(
     bias_init=constant(0.0),
     use_bias: bool = True,
 ):
-    if _use_lora_layer(config, layer_name):
-        return LoRADense(
+    if _use_adapter_layer(config, layer_name):
+        adapter_type = _adapter_type(config)
+        common_kwargs = dict(
             features=features,
-            rank=int(config.get("LORA_RANK", 0)),
-            alpha=float(config.get("LORA_ALPHA", 1.0)),
+            rank=_adapter_rank(config),
+            alpha=_adapter_alpha(config),
             use_bias=use_bias,
             kernel_init=kernel_init,
             bias_init=bias_init,
             name=layer_name,
-        )(x)
+        )
+        if adapter_type == "lora":
+            return LoRADense(**common_kwargs)(x)
+        if adapter_type == "residual":
+            activation = nn.relu if config["ACTIVATION"] == "relu" else nn.tanh
+            return ResidualAdapterDense(
+                activation=activation,
+                **common_kwargs,
+            )(x)
+        raise ValueError(f"Unsupported ADAPTER_TYPE: {adapter_type}")
     return nn.Dense(
         features=features,
         kernel_init=kernel_init,
@@ -446,24 +523,144 @@ def _count_params(tree) -> int:
     return int(sum(np.prod(np.asarray(x).shape) for x in jax.tree_util.tree_leaves(tree)))
 
 
-def _count_lora_params(tree) -> int:
+def _count_adapter_params(tree) -> int:
     flat = traverse_util.flatten_dict(tree)
     total = 0
     for path, value in flat.items():
-        if len(path) > 0 and path[-1] in {"lora_A", "lora_B"}:
+        if len(path) > 0 and path[-1] in {"lora_A", "lora_B", "adapter_A", "adapter_B"}:
             total += int(np.prod(np.asarray(value).shape))
     return total
 
 
-def _keep_lora_grads_only(tree):
+def _mask_grads_by_train_flags(
+    tree,
+    *,
+    train_base: bool = True,
+    train_adapter_a: bool = True,
+    train_adapter_b: bool = True,
+):
     flat = traverse_util.flatten_dict(tree)
     masked = {}
     for path, value in flat.items():
-        if len(path) > 0 and path[-1] in {"lora_A", "lora_B"}:
+        leaf_name = path[-1] if len(path) > 0 else ""
+        if leaf_name in {"lora_A", "adapter_A"}:
+            keep = train_adapter_a
+        elif leaf_name in {"lora_B", "adapter_B"}:
+            keep = train_adapter_b
+        else:
+            keep = train_base
+
+        if keep:
             masked[path] = value
         else:
             masked[path] = jnp.zeros_like(value)
     return traverse_util.unflatten_dict(masked)
+
+
+def _stable_hash(text: str) -> int:
+    # FNV-1a 32-bit hash for deterministic path-specific projections.
+    h = 2166136261
+    for ch in text.encode("utf-8"):
+        h ^= ch
+        h = (h * 16777619) & 0xFFFFFFFF
+    return int(h)
+
+
+def _context_features_from_traj(traj: Dict[str, Any], action_dim: int) -> np.ndarray:
+    obs = np.asarray(traj["obs"], dtype=np.float32)
+    done = np.asarray(traj["done"], dtype=np.float32)
+    action = np.asarray(traj["action"], dtype=np.int32)
+    rewards = np.asarray(traj["rewards"], dtype=np.float32)
+
+    if rewards.size == 0:
+        rewards = np.zeros((1,), dtype=np.float32)
+    if action.size == 0:
+        action = np.zeros((1,), dtype=np.int32)
+
+    action_hist = np.bincount(action.reshape(-1), minlength=action_dim).astype(np.float32)
+    action_hist_sum = float(action_hist.sum())
+    if action_hist_sum > 0:
+        action_hist /= action_hist_sum
+
+    obs_flat = obs.reshape((obs.shape[0], -1))
+    obs_mean = float(obs_flat.mean())
+    obs_std = float(obs_flat.std())
+    done_ratio = float(done.mean()) if done.size > 0 else 0.0
+    rew_mean = float(rewards.mean())
+    rew_std = float(rewards.std())
+    rew_max = float(rewards.max())
+    rew_min = float(rewards.min())
+    ep_len = float(rewards.shape[0])
+
+    stats = np.asarray(
+        [
+            obs_mean,
+            obs_std,
+            done_ratio,
+            rew_mean,
+            rew_std,
+            rew_max,
+            rew_min,
+            ep_len / 100.0,
+        ],
+        dtype=np.float32,
+    )
+    return np.concatenate([stats, action_hist], axis=0)
+
+
+def _init_adapter_b_from_context(
+    params,
+    context_vec: np.ndarray,
+    *,
+    seed: int = 0,
+    scale: float = 0.15,
+    blend: float = 0.7,
+):
+    flat = traverse_util.flatten_dict(params)
+    context = np.asarray(context_vec, dtype=np.float32).reshape(-1)
+    if context.size == 0:
+        return params
+
+    context = context / (np.linalg.norm(context) + 1e-6)
+    ctx_dim = int(context.shape[0])
+    scale = float(max(scale, 0.0))
+    blend = float(np.clip(blend, 0.0, 1.0))
+
+    updated = {}
+    for path, value in flat.items():
+        if len(path) == 0 or path[-1] not in {"lora_B", "adapter_B"}:
+            updated[path] = value
+            continue
+
+        value_np = np.asarray(value)
+        if value_np.ndim != 2:
+            updated[path] = value
+            continue
+
+        rank, out_dim = value_np.shape
+        key = "/".join([str(x) for x in path])
+        rs = np.random.RandomState((int(seed) + _stable_hash(key)) % (2**32 - 1))
+
+        proj_u = rs.normal(
+            loc=0.0,
+            scale=1.0 / np.sqrt(max(ctx_dim, 1)),
+            size=(ctx_dim, rank),
+        ).astype(np.float32)
+        proj_v = rs.normal(
+            loc=0.0,
+            scale=1.0 / np.sqrt(max(ctx_dim, 1)),
+            size=(ctx_dim, out_dim),
+        ).astype(np.float32)
+
+        u = np.tanh(context @ proj_u)
+        v = np.tanh(context @ proj_v)
+        b_ctx = np.outer(u, v).astype(np.float32)
+
+        b_old = value_np.astype(np.float32, copy=False)
+        b_new = blend * b_old + (1.0 - blend) * scale * b_ctx
+        updated[path] = jnp.asarray(b_new, dtype=value.dtype)
+
+    return traverse_util.unflatten_dict(updated)
 
 
 def _discounted_returns(rewards: np.ndarray, gamma: float) -> np.ndarray:
@@ -526,6 +723,10 @@ def make_train(
         config["CLIP_EPS"] / env.num_agents
         if config.get("SCALE_CLIP_EPS", False)
         else config["CLIP_EPS"]
+    )
+    log_interval_updates = max(int(config.get("METRIC_LOG_INTERVAL_UPDATES", 1)), 1)
+    checkpoint_interval_updates = max(
+        int(config.get("CHECKPOINT_INTERVAL_UPDATES", 1)), 1
     )
 
     env = OvercookedV2WorldStateWrapper(env, source=world_state_source)
@@ -809,9 +1010,18 @@ def make_train(
                         targets,
                     )
 
-                    if bool(config.get("LORA_TRAIN_ONLY", False)):
-                        actor_grads = _keep_lora_grads_only(actor_grads)
-                        critic_grads = _keep_lora_grads_only(critic_grads)
+                    actor_grads = _mask_grads_by_train_flags(
+                        actor_grads,
+                        train_base=bool(config.get("MAIN_TRAIN_BASE", True)),
+                        train_adapter_a=_train_adapter_a_flag(config, "MAIN", True),
+                        train_adapter_b=_train_adapter_b_flag(config, "MAIN", True),
+                    )
+                    critic_grads = _mask_grads_by_train_flags(
+                        critic_grads,
+                        train_base=bool(config.get("MAIN_TRAIN_BASE", True)),
+                        train_adapter_a=_train_adapter_a_flag(config, "MAIN", True),
+                        train_adapter_b=_train_adapter_b_flag(config, "MAIN", True),
+                    )
 
                     actor_train_state = actor_train_state.apply_gradients(grads=actor_grads)
                     critic_train_state = critic_train_state.apply_gradients(grads=critic_grads)
@@ -895,26 +1105,55 @@ def make_train(
             metric["update_step"] = update_step
             metric["env_step"] = update_step * config["NUM_STEPS"] * config["NUM_ENVS"]
 
+            is_last_update = jnp.equal(update_step, config["NUM_UPDATES"])
+            do_metric_log = jnp.logical_or(
+                jnp.equal(jnp.mod(update_step, log_interval_updates), 0),
+                is_last_update,
+            )
+            do_checkpoint = jnp.logical_or(
+                jnp.equal(jnp.mod(update_step, checkpoint_interval_updates), 0),
+                is_last_update,
+            )
+
             if checkpoint_callback is not None:
                 ckpt_metric = metric
                 for key in checkpoint_metric_key.split("."):
                     ckpt_metric = ckpt_metric[key]
                 ckpt_metric = jnp.asarray(ckpt_metric).mean()
-                jax.debug.callback(
-                    checkpoint_callback,
-                    train_states[0].params,
-                    ckpt_metric,
-                    metric["update_step"],
-                    metric["env_step"],
-                    seed_idx,
-                    ordered=True,
+
+                def _emit_checkpoint(_):
+                    jax.debug.callback(
+                        checkpoint_callback,
+                        train_states[0].params,
+                        ckpt_metric,
+                        metric["update_step"],
+                        metric["env_step"],
+                        seed_idx,
+                        ordered=True,
+                    )
+                    return jnp.int32(0)
+
+                _ = jax.lax.cond(
+                    do_checkpoint,
+                    _emit_checkpoint,
+                    lambda _: jnp.int32(0),
+                    operand=jnp.int32(0),
                 )
 
             if wandb_callback is not None:
-                jax.debug.callback(
-                    wandb_callback,
-                    metric,
-                    seed_idx,
+                def _emit_metric(_):
+                    jax.debug.callback(
+                        wandb_callback,
+                        metric,
+                        seed_idx,
+                    )
+                    return jnp.int32(0)
+
+                _ = jax.lax.cond(
+                    do_metric_log,
+                    _emit_metric,
+                    lambda _: jnp.int32(0),
+                    operand=jnp.int32(0),
                 )
 
             runner_state = (
@@ -944,7 +1183,7 @@ def make_train(
     return train
 
 
-@hydra.main(version_base=None, config_path="config", config_name="mappo_rnn_overcooked_v2_lora_tta")
+@hydra.main(version_base=None, config_path="config", config_name="talora_rnn_overcooked_v2")
 def main(config):
     config = OmegaConf.to_container(config)
     layout_name = config["ENV_KWARGS"]["layout"]
@@ -953,11 +1192,11 @@ def main(config):
     metric_key = config.get("SAVE_BEST_BY", "returned_episode_returns")
     save_path = config.get("SAVE_PATH", "")
     save_best_mode = config.get("SAVE_BEST_MODE", "max")
-    alg_name = "mappo_rnn_overcooked_v2_lora_tta"
-    run_name_prefix = f"mappo_rnn_overcooked_v2_lora_tta_{layout_name}_{ws_source}"
+    alg_name = "talora_rnn_overcooked_v2"
+    run_name_prefix = f"talora_rnn_overcooked_v2_{layout_name}_{ws_source}"
     wandb_enabled = config["WANDB_MODE"] != "disabled"
     wandb_group_override = config.get("WANDB_GROUP", "")
-    algo_label = str(config.get("WANDB_ALGO_LABEL", "MAPPO_LORA_TTA")).strip() or "MAPPO_LORA_TTA"
+    algo_label = str(config.get("WANDB_ALGO_LABEL", "TALORA")).strip() or "TALORA"
     seed_runs = {}
     seed_group = None
     tensorboard_enabled = bool(config.get("TENSORBOARD_ENABLED", False))
@@ -1210,7 +1449,10 @@ def main(config):
             normalize_returns = bool(config.get("TTA_NORMALIZE_RETURNS", True))
             deterministic_eval = bool(config.get("TTA_DETERMINISTIC_EVAL", True))
             use_shaped_reward = bool(config.get("TTA_USE_SHAPED_REWARD", False))
-            tta_lora_only = bool(config.get("TTA_LORA_ONLY", True))
+            tta_train_base = bool(config.get("TTA_TRAIN_BASE", False))
+            tta_train_adapter_a = _train_adapter_a_flag(config, "TTA", False)
+            tta_train_adapter_b = _train_adapter_b_flag(config, "TTA", True)
+            tta_action_dim = int(tta_env.action_space(tta_env.agents[0]).n)
 
             @jax.jit
             def _policy_step_sample(params, hstate, obs_batch, done_batch, sample_rng):
@@ -1226,7 +1468,12 @@ def main(config):
                 action = pi.mode()
                 return hstate, action
 
-            if tta_lora_only and _count_lora_params(actor_params) == 0:
+            if (
+                (not tta_train_base)
+                and (not tta_train_adapter_a)
+                and tta_train_adapter_b
+                and _count_adapter_params(actor_params) == 0
+            ):
                 return {
                     "seed_id": seed_id,
                     "layout": tta_env_kwargs.get("layout", ""),
@@ -1234,7 +1481,7 @@ def main(config):
                     "after_return_mean": float("nan"),
                     "gain_return_mean": float("nan"),
                     "num_updates": int(config.get("TTA_NUM_ADAPT_EPISODES", 0)),
-                    "warning": "No LoRA parameters found while TTA_LORA_ONLY=True.",
+                    "warning": "No adapter parameters found while TTA updates are set to B-only.",
                 }
 
             def _collect_episode(params, rng_key, deterministic: bool):
@@ -1331,6 +1578,30 @@ def main(config):
                 int(config["SEED"]) + 10_000 + int(seed_id) * 1_003
             )
 
+            context_norm = float("nan")
+            if bool(config.get("TTA_INIT_B_FROM_CONTEXT", True)):
+                num_context_eps = max(1, int(config.get("TTA_NUM_CONTEXT_EPISODES", 2)))
+                context_deterministic = bool(config.get("TTA_CONTEXT_DETERMINISTIC", False))
+                context_feats = []
+                for _ in range(num_context_eps):
+                    context_traj, _, rng_tta = _collect_episode(
+                        tta_state.params,
+                        rng_tta,
+                        deterministic=context_deterministic,
+                    )
+                    context_feats.append(_context_features_from_traj(context_traj, tta_action_dim))
+                context_vec = np.mean(np.stack(context_feats, axis=0), axis=0)
+                context_norm = float(np.linalg.norm(context_vec))
+                tta_state = tta_state.replace(
+                    params=_init_adapter_b_from_context(
+                        tta_state.params,
+                        context_vec,
+                        seed=int(config["SEED"]) + int(seed_id) * 1009,
+                        scale=float(config.get("TTA_B_INIT_SCALE", 0.15)),
+                        blend=float(config.get("TTA_B_INIT_BLEND", 0.7)),
+                    )
+                )
+
             eval_episodes = int(config.get("TTA_NUM_EVAL_EPISODES", 10))
             before_returns = []
             for _ in range(eval_episodes):
@@ -1353,8 +1624,12 @@ def main(config):
                     traj["action"],
                     returns_jnp,
                 )
-                if tta_lora_only:
-                    grads = _keep_lora_grads_only(grads)
+                grads = _mask_grads_by_train_flags(
+                    grads,
+                    train_base=tta_train_base,
+                    train_adapter_a=tta_train_adapter_a,
+                    train_adapter_b=tta_train_adapter_b,
+                )
                 tta_state = tta_state.apply_gradients(grads=grads)
 
                 run_i = seed_runs.get(seed_id)
@@ -1368,6 +1643,7 @@ def main(config):
                             "tta_update": int(upd + 1),
                             "tta_loss": float(np.asarray(loss)),
                             "tta_episode_return": float(ep_ret),
+                            "tta_context_norm": context_norm,
                         },
                         step=tta_env_step,
                     )
@@ -1388,6 +1664,7 @@ def main(config):
                 "after_return_mean": after_mean,
                 "gain_return_mean": after_mean - before_mean,
                 "num_updates": num_adapt,
+                "context_norm": context_norm,
                 "warning": "",
             }
 
@@ -1405,14 +1682,15 @@ def main(config):
 
         final_actor_train_state = out["runner_state"][0][0][0]
         total_actor_params = _count_params(final_actor_train_state.params)
-        lora_actor_params = _count_lora_params(final_actor_train_state.params)
-        if lora_actor_params > 0:
+        adapter_actor_params = _count_adapter_params(final_actor_train_state.params)
+        adapter_type = _adapter_type(config).upper()
+        if adapter_actor_params > 0:
             print(
-                f"[LoRA] Actor params: total={total_actor_params}, lora={lora_actor_params} "
-                f"({100.0 * lora_actor_params / max(total_actor_params, 1):.2f}%)."
+                f"[{adapter_type}] Actor params: total={total_actor_params}, adapter={adapter_actor_params} "
+                f"({100.0 * adapter_actor_params / max(total_actor_params, 1):.2f}%)."
             )
         else:
-            print(f"[LoRA] Actor params: total={total_actor_params}, lora=0.")
+            print(f"[{adapter_type}] Actor params: total={total_actor_params}, adapter=0.")
 
         if checkpoint_managers:
             for i in range(num_seeds):

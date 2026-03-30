@@ -1,17 +1,32 @@
-# Byte-compiled / optimized / DLL files
+# Python cache/build artifacts
 __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
+
+# Notebook/editor clutter
 *.ipynb
-*.DS_Store
-.vscode/
 .ipynb_checkpoints/
+.DS_Store
+.vscode/
+
+# Local build/temp outputs
 docker/*
 *.pickle
 results/
 tmp/
+models/
 *-checkpoint.py
+
+# Experiment outputs
 wandb/
 outputs/
-models/
+tb_logs/
+train_logs/
+check_points/
+baselines/TARL/sp_xp_outputs/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

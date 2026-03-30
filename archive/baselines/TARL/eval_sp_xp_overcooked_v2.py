@@ -20,13 +20,25 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from baselines.IPPO.ippo_rnn_overcooked_v2 import (
+from archive.baselines.IPPO.ippo_rnn_overcooked_v2 import (
     ActorCriticRNN as IPPOActorCriticRNN,
     ScannedRNN as IPPOScannedRNN,
 )
-from baselines.TARL.mappo_rnn_overcooked_v2_v2 import (
+from baselines.IPPO.ippo_rnn_overcooked_v2_v3 import (
+    ActorCriticRNN as IPPOActorCriticRNNV3,
+    ScannedRNN as IPPOScannedRNNV3,
+)
+from archive.baselines.TARL.mappo_rnn_overcooked_v2_v2 import (
     ActorRNN as MAPPOActorRNN,
     ScannedRNN as MAPPOScannedRNN,
+)
+from baselines.MAPPO.mappo_rnn_overcooked_v2_v3 import (
+    ActorRNN as MAPPOActorRNNV3,
+    ScannedRNN as MAPPOScannedRNNV3,
+)
+from baselines.TARL.talora_rnn_overcooked_v2 import (
+    ActorRNN as TALORAActorRNN,
+    ScannedRNN as TALORAScannedRNN,
 )
 from jaxmarl.viz.overcooked_v2_visualizer import OvercookedV2Visualizer
 from jaxmarl.wrappers.baselines import load_params
@@ -100,7 +112,7 @@ class PartnerPolicy:
         self.name = model_cfg["name"]
         self.algo = model_cfg["algo"]
         self.policy_config = model_cfg.get("policy_config", {})
-        self.hidden_dim = int(self.policy_config["GRU_HIDDEN_DIM"])
+        self.hidden_dim = int(self.policy_config.get("GRU_HIDDEN_DIM", 128))
         self.deterministic = deterministic
         self.model_id = model_cfg.get(
             "model_id", f"{self.algo}:{model_cfg['resolved_checkpoint']}"
@@ -111,10 +123,21 @@ class PartnerPolicy:
 
         if self.algo == "ippo_rnn_overcooked_v2":
             self._init_ippo()
+        elif self.algo == "ippo_rnn_overcooked_v2_v3":
+            self._init_ippo_v3()
         elif self.algo == "mappo_rnn_overcooked_v2_v2":
             self._init_mappo_v2()
+        elif self.algo == "mappo_rnn_overcooked_v2_v3":
+            self._init_mappo_v3()
+        elif self.algo in ("mappo_rnn_overcooked_v2_ab_tta", "talora_rnn_overcooked_v2"):
+            self._init_talora()
         else:
-            raise ValueError(f"Unsupported algo in eval: {self.algo}")
+            supported = (
+                "ippo_rnn_overcooked_v2, ippo_rnn_overcooked_v2_v3, "
+                "mappo_rnn_overcooked_v2_v2, mappo_rnn_overcooked_v2_v3, "
+                "mappo_rnn_overcooked_v2_ab_tta, talora_rnn_overcooked_v2"
+            )
+            raise ValueError(f"Unsupported algo in eval: {self.algo}. Supported: {supported}")
 
     def _init_ippo(self):
         self.network = IPPOActorCriticRNN(self.action_dim, config=self.policy_config)
@@ -129,6 +152,19 @@ class PartnerPolicy:
         self._infer = jax.jit(_infer)
         self._carry_init = IPPOScannedRNN.initialize_carry
 
+    def _init_ippo_v3(self):
+        self.network = IPPOActorCriticRNNV3(self.action_dim, config=self.policy_config)
+        if self.deterministic:
+            def _infer(params, hidden, obs_t, done_t):
+                new_hidden, pi, _ = self.network.apply(params, hidden, (obs_t, done_t))
+                return new_hidden, pi.mode()
+        else:
+            def _infer(params, hidden, obs_t, done_t, rng):
+                new_hidden, pi, _ = self.network.apply(params, hidden, (obs_t, done_t))
+                return new_hidden, pi.sample(seed=rng)
+        self._infer = jax.jit(_infer)
+        self._carry_init = IPPOScannedRNNV3.initialize_carry
+
     def _init_mappo_v2(self):
         self.network = MAPPOActorRNN(self.action_dim, config=self.policy_config)
         if self.deterministic:
@@ -141,6 +177,32 @@ class PartnerPolicy:
                 return new_hidden, pi.sample(seed=rng)
         self._infer = jax.jit(_infer)
         self._carry_init = MAPPOScannedRNN.initialize_carry
+
+    def _init_mappo_v3(self):
+        self.network = MAPPOActorRNNV3(self.action_dim, config=self.policy_config)
+        if self.deterministic:
+            def _infer(params, hidden, obs_t, done_t):
+                new_hidden, pi = self.network.apply(params, hidden, (obs_t, done_t))
+                return new_hidden, pi.mode()
+        else:
+            def _infer(params, hidden, obs_t, done_t, rng):
+                new_hidden, pi = self.network.apply(params, hidden, (obs_t, done_t))
+                return new_hidden, pi.sample(seed=rng)
+        self._infer = jax.jit(_infer)
+        self._carry_init = MAPPOScannedRNNV3.initialize_carry
+
+    def _init_talora(self):
+        self.network = TALORAActorRNN(self.action_dim, config=self.policy_config)
+        if self.deterministic:
+            def _infer(params, hidden, obs_t, done_t):
+                new_hidden, pi = self.network.apply(params, hidden, (obs_t, done_t))
+                return new_hidden, pi.mode()
+        else:
+            def _infer(params, hidden, obs_t, done_t, rng):
+                new_hidden, pi = self.network.apply(params, hidden, (obs_t, done_t))
+                return new_hidden, pi.sample(seed=rng)
+        self._infer = jax.jit(_infer)
+        self._carry_init = TALORAScannedRNN.initialize_carry
 
     def init_hidden(self):
         return self._carry_init(1, self.hidden_dim)

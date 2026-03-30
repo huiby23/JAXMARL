@@ -1,0 +1,89 @@
+"ENV_NAME": "overcooked_v2"
+"WORLD_STATE_SOURCE": "obs_concat" # options: obs_concat | env_state
+"ENV_KWARGS":
+  "layout": "forced_coord"
+  "agent_view_size": 2
+  "negative_rewards": True
+  "sample_recipe_on_delivery": True
+  "random_agent_positions": True
+
+"LR": 0.00025
+"ANNEAL_LR": True
+"LR_WARMUP": 0.05
+
+"NUM_ENVS": 512
+"NUM_STEPS": 128
+"UPDATE_EPOCHS": 2
+"NUM_MINIBATCHES": 8
+"METRIC_LOG_INTERVAL_UPDATES": 10
+"CHECKPOINT_INTERVAL_UPDATES": 50
+
+"TOTAL_TIMESTEPS": 3e7
+"REW_SHAPING_HORIZON": 1.5e7
+
+"FC_DIM_SIZE": 128
+"GRU_HIDDEN_DIM": 128
+
+"CLIP_EPS": 0.2
+"ENT_COEF": 0.01
+"GAMMA": 0.99
+"GAE_LAMBDA": 0.95
+"SCALE_CLIP_EPS": False
+"VF_COEF": 0.5
+"MAX_GRAD_NORM": 0.25
+"ACTIVATION": "relu"
+"SEED": 0
+"NUM_SEEDS": 5
+
+"ENTITY": ""
+"PROJECT": ""
+"WANDB_MODE": "disabled"
+"WANDB_GROUP": ""
+"WANDB_ALGO_LABEL": "TALORA_ACTOR_AB"
+"SAVE_PATH": "check_points/talora_rnn_overcooked_v2_actor_ab"
+"SAVE_BEST_BY": "returned_episode_returns"
+"SAVE_BEST_MODE": "max"
+"TENSORBOARD_ENABLED": False
+"TENSORBOARD_DIR": "tb_logs/talora_rnn_overcooked_v2_actor_ab"
+"TENSORBOARD_RUN_NAME": ""
+"TENSORBOARD_FLUSH_SECS": 10
+"TENSORBOARD_LOG_SEED_RUNS": True
+"TENSORBOARD_LOG_AGGREGATE": True
+"TENSORBOARD_MARGIN_CHART": True
+"TENSORBOARD_LOG_STD_LINE": False
+
+"LORA_ENABLED": True
+"LORA_RANK": 8
+"LORA_ALPHA": 16.0
+# Keep LoRA on the actor head only so the TTA adapter matches the test-time update target.
+"LORA_TARGETS":
+  - "actor_fc"
+  - "actor_logits"
+
+# Main phase train flags (A: capability subspace, B: adaptation coefficients)
+"MAIN_TRAIN_BASE": True
+"MAIN_TRAIN_LORA_A": True
+"MAIN_TRAIN_LORA_B": True
+
+"TTA_ENABLE": False
+"TTA_LAYOUT": "test_time_wide"
+"TTA_ENV_KWARGS": {}
+"TTA_NUM_ENVS": 1
+"TTA_INIT_B_FROM_CONTEXT": True
+"TTA_NUM_CONTEXT_EPISODES": 2
+"TTA_CONTEXT_DETERMINISTIC": False
+"TTA_B_INIT_SCALE": 0.15
+"TTA_B_INIT_BLEND": 0.7
+
+# Freeze the trained base model at test time and adapt the low-rank residual itself.
+"TTA_TRAIN_BASE": False
+"TTA_TRAIN_LORA_A": True
+"TTA_TRAIN_LORA_B": True
+"TTA_NUM_EVAL_EPISODES": 10
+"TTA_NUM_ADAPT_EPISODES": 10
+"TTA_LR": 5e-5
+"TTA_GAMMA": 0.99
+"TTA_ENT_COEF": 0.0
+"TTA_NORMALIZE_RETURNS": True
+"TTA_USE_SHAPED_REWARD": False
+"TTA_DETERMINISTIC_EVAL": True

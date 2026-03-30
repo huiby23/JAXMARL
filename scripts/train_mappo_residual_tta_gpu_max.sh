@@ -2,4 +2,4 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$SCRIPT_DIR/train_overcooked_5seeds.sh" mappo_v2 "$@"
+exec "$SCRIPT_DIR/train_talora_residual_tta_gpu_max.sh" "$@"

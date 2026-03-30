@@ -11,10 +11,12 @@
 "ANNEAL_LR": True
 "LR_WARMUP": 0.05
 
-"NUM_ENVS": 256
-"NUM_STEPS": 256
-"UPDATE_EPOCHS": 4
-"NUM_MINIBATCHES": 64
+"NUM_ENVS": 512
+"NUM_STEPS": 128
+"UPDATE_EPOCHS": 2
+"NUM_MINIBATCHES": 8
+"METRIC_LOG_INTERVAL_UPDATES": 10
+"CHECKPOINT_INTERVAL_UPDATES": 50
 
 "TOTAL_TIMESTEPS": 3e7
 "REW_SHAPING_HORIZON": 1.5e7
@@ -35,14 +37,14 @@
 
 "ENTITY": ""
 "PROJECT": ""
-"WANDB_MODE": "online"
+"WANDB_MODE": "disabled"
 "WANDB_GROUP": ""
-"WANDB_ALGO_LABEL": "MAPPO_LORA_TTA"
-"SAVE_PATH": "check_points/mappo_rnn_overcooked_v2_lora_tta"
+"WANDB_ALGO_LABEL": "TALORA_B_ONLY"
+"SAVE_PATH": "check_points/talora_rnn_overcooked_v2_b_only"
 "SAVE_BEST_BY": "returned_episode_returns"
 "SAVE_BEST_MODE": "max"
 "TENSORBOARD_ENABLED": False
-"TENSORBOARD_DIR": "tb_logs/mappo_rnn_overcooked_v2_lora_tta"
+"TENSORBOARD_DIR": "tb_logs/talora_rnn_overcooked_v2_b_only"
 "TENSORBOARD_RUN_NAME": ""
 "TENSORBOARD_FLUSH_SECS": 10
 "TENSORBOARD_LOG_SEED_RUNS": True
@@ -53,23 +55,33 @@
 "LORA_ENABLED": True
 "LORA_RANK": 8
 "LORA_ALPHA": 16.0
+# Keep LoRA on the actor head only so train/test attribution stays clean for TTA.
 "LORA_TARGETS":
   - "actor_fc"
   - "actor_logits"
-  - "critic_fc"
-  - "critic_value"
-"LORA_TRAIN_ONLY": False
+
+# Main phase train flags (A: capability subspace, B: adaptation coefficients)
+"MAIN_TRAIN_BASE": True
+"MAIN_TRAIN_LORA_A": True
+"MAIN_TRAIN_LORA_B": True
 
 "TTA_ENABLE": False
 "TTA_LAYOUT": "test_time_wide"
 "TTA_ENV_KWARGS": {}
 "TTA_NUM_ENVS": 1
+"TTA_INIT_B_FROM_CONTEXT": True
+"TTA_NUM_CONTEXT_EPISODES": 2
+"TTA_CONTEXT_DETERMINISTIC": False
+"TTA_B_INIT_SCALE": 0.15
+"TTA_B_INIT_BLEND": 0.7
+"TTA_TRAIN_BASE": False
+"TTA_TRAIN_LORA_A": False
+"TTA_TRAIN_LORA_B": True
 "TTA_NUM_EVAL_EPISODES": 10
 "TTA_NUM_ADAPT_EPISODES": 10
 "TTA_LR": 5e-5
 "TTA_GAMMA": 0.99
 "TTA_ENT_COEF": 0.0
 "TTA_NORMALIZE_RETURNS": True
-"TTA_LORA_ONLY": True
 "TTA_USE_SHAPED_REWARD": False
 "TTA_DETERMINISTIC_EVAL": True
